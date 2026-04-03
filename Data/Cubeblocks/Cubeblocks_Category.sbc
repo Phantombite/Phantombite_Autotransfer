@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    <CategoryClasses>
+        <Category xsi:type="MyObjectBuilder_GuiBlockCategoryDefinition">
+            <Id>
+                <TypeId>GuiBlockCategoryDefinition</TypeId>
+                <SubtypeId/>
+            </Id>
+            <DisplayName>Autotrans</DisplayName>
+            <Name>Autotrans</Name>
+            <ItemIds>
+                <string>AutotransZoneContainer</string>
+                <string>AutotransLargeBlockLargeContainer</string>
+                <string>AutotransLargeBlockLargeIndustrialContainer</string>
+                <string>AutotransConnector</string>
+                <string>AutotransConnectorSmall</string>
+                <string>AutotransConnectorMedium</string>
+                <string>AutotransLargeBlockInsetConnector</string>
+                <string>AutotransLargeBlockInsetConnectorSmall</string>
+                <string>AutotransSmallBlockInsetConnector</string>
+                <string>AutotransSmallBlockInsetConnectorMedium</string>
+                <string>AutotransLargeBlockConveyorSorter</string>
+                <string>AutotransMediumBlockConveyorSorter</string>
+                <string>AutotransSmallBlockConveyorSorter</string>
+                <string>AutotransSmallTextPanel</string>
+                <string>AutotransSmallLCDPanelWide</string>
+                <string>AutotransSmallLCDPanel</string>
+                <string>AutotransLargeBlockCorner_LCD_1</string>
+                <string>AutotransLCDLargeBlockCorner_LCD_2</string>
+                <string>AutotransLargeBlockCorner_LCD_Flat_1</string>
+                <string>AutotransLargeBlockCorner_LCD_Flat_2</string>
+                <string>AutotransSmallBlockCorner_LCD_1</string>
+                <string>AutotransSmallBlockCorner_LCD_2</string>
+                <string>AutotransSmallBlockCorner_LCD_Flat_1</string>
+                <string>AutotransSmallBlockCorner_LCD_Flat_2</string>
+                <string>AutotransLargeTextPanel</string>
+                <string>AutotransLargeLCDPanel</string>
+                <string>AutotransLargeLCDPanelWide</string>
+                <string>AutotransTransparentLCDLarge</string>
+                <string>AutotransTransparentLCDSmall</string>
+                <string>AutotransHoloLCDLarge</string>
+                <string>AutotransHoloLCDSmall</string>
+                <string>AutotransLargeFullBlockLCDPanel</string>
+                <string>AutotransSmallFullBlockLCDPanel</string>
+                <string>AutotransLargeDiagonalLCDPanel</string>
+                <string>AutotransSmallDiagonalLCDPanel</string>
+                <string>AutotransLargeCurvedLCDPanel</string>
+                <string>AutotransSmallCurvedLCDPanel</string>
+                <string>AutotransSmallBlockConsoleModuleScreens</string>
+                <string>AutotransLargeLCDPanel5x5</string>
+                <string>AutotransLargeLCDPanel5x3</string>
+                <string>AutotransLargeLCDPanel3x3</string>
+            </ItemIds>
+        </Category>
+    </CategoryClasses>
+</Definitions>

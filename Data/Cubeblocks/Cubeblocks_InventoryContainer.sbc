@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+    
+    <EntityContainers>
+        
+        <Container>
+            <Id>
+                <TypeId>CargoContainer</TypeId>
+                <SubtypeId>AutotransZoneContainer</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransZoneContainer" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <Container>
+            <Id>
+                <TypeId>CargoContainer</TypeId>
+                <SubtypeId>AutotransLargeBlockLargeContainer</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransLargeBlockLargeContainer" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <Container>
+            <Id>
+                <TypeId>CargoContainer</TypeId>
+                <SubtypeId>AutotransLargeBlockLargeIndustrialContainer</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransLargeBlockLargeIndustrialContainer" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <!--Connector-->
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransConnector</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransConnector" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransConnectorSmall</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransConnectorSmall" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransConnectorMedium</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransConnectorMedium" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+        
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransLargeBlockInsetConnector</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransLargeBlockInsetConnector" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+        
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransLargeBlockInsetConnectorSmall</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransLargeBlockInsetConnectorSmall" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+        
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransSmallBlockInsetConnector</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransSmallBlockInsetConnector" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+        
+        <Container>
+            <Id>
+                <TypeId>ShipConnector</TypeId>
+                <SubtypeId>AutotransSmallBlockInsetConnectorMedium</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransSmallBlockInsetConnectorMedium" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+        
+    </EntityContainers>
+
+    <EntityComponents>
+
+        <!--Connector-->
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransConnector</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransConnectorSmall</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransConnectorMedium</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransLargeBlockInsetConnector</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransLargeBlockInsetConnectorSmall</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransSmallBlockInsetConnector</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransSmallBlockInsetConnectorMedium</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+    </EntityComponents>   
+</Definitions>
