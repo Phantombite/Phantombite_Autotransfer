@@ -93,7 +93,7 @@
                 <Model BuildPercentUpperBound="0.66" File="Models\Cubes\Large\CargoContainerLargeConstruction_2.mwm" />
                 <Model BuildPercentUpperBound="1.00" File="Models\Cubes\Large\CargoContainerLargeConstruction_3.mwm" />
             </BuildProgressModels>
-            <BlockPairName>LargeCargoContainer</BlockPairName>
+            <BlockPairName>TraderLargeCargoContainer</BlockPairName>
             <MirroringY>Z</MirroringY>
             <MirroringZ>Y</MirroringZ>
             <EdgeType>Light</EdgeType>
@@ -167,7 +167,7 @@
                 <Model BuildPercentUpperBound="0.66" File="Models\Cubes\Large\CargoContainerConstruction_2.mwm" />
                 <Model BuildPercentUpperBound="1.00" File="Models\Cubes\Large\CargoContainerConstruction_3.mwm" />
             </BuildProgressModels>
-            <BlockPairName>LargeCargoContainerIndustrial</BlockPairName>
+            <BlockPairName>TraderLargeCargoContainerIndustrial</BlockPairName>
             <MirroringY>Z</MirroringY>
             <MirroringZ>Y</MirroringZ>
             <EdgeType>Light</EdgeType>
@@ -652,7 +652,7 @@
                 <Model BuildPercentUpperBound="0.66" File="Models\Cubes\Large\ConveyorSorterConstruction_2.mwm" />
                 <Model BuildPercentUpperBound="1.00" File="Models\Cubes\Large\ConveyorSorterConstruction_3.mwm" />
             </BuildProgressModels>
-            <BlockPairName>ConveyorSorter</BlockPairName>
+            <BlockPairName>TraderConveyorSorter</BlockPairName>
             <MirroringY>Z</MirroringY>
             <MirroringZ>Y</MirroringZ>
             <EdgeType>Light</EdgeType>
@@ -704,7 +704,7 @@
                 <Model BuildPercentUpperBound="0.50" File="Models\Cubes\Small\ConveyorSorterMediumConstruction_1.mwm" />
                 <Model BuildPercentUpperBound="1.00" File="Models\Cubes\Small\ConveyorSorterMediumConstruction_2.mwm" />
             </BuildProgressModels>
-            <BlockPairName>ConveyorSorter</BlockPairName>
+            <BlockPairName>TraderConveyorSorter</BlockPairName>
             <MirroringY>Z</MirroringY>
             <MirroringZ>Y</MirroringZ>
             <EdgeType>Light</EdgeType>
@@ -755,7 +755,7 @@
                 <Model BuildPercentUpperBound="0.50" File="Models\Cubes\Small\ConveyorSorterSmallConstruction_1.mwm" />
                 <Model BuildPercentUpperBound="1.00" File="Models\Cubes\Small\ConveyorSorterSmallConstruction_2.mwm" />
             </BuildProgressModels>
-            <BlockPairName>ConveyorSorterSmall</BlockPairName>
+            <BlockPairName>TraderConveyorSorterSmall</BlockPairName>
             <MirroringY>Z</MirroringY>
             <MirroringZ>Y</MirroringZ>
             <EdgeType>Light</EdgeType>

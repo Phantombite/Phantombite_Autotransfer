@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Sandbox.ModAPI;
 using VRage.Game.ModAPI;
 using VRage.Utils;
@@ -26,6 +27,7 @@ namespace PhantombiteAutoTransfer.Modules
         private const long   CORE_CHANNEL         = 1995000L;
         private const long   AUTOTRANSFER_CHANNEL  = 1995009L;
         private const long   LOG_CHANNEL           = 1995999L;
+        private const ushort NOTIFY_PACKET_ID      = 19509;   // Netzwerkpaket: Server → Client
         private const string MOD_NAME              = "Phantombite_AutoTransfer";
         private const string SENDER                = "[AT]";
 
@@ -48,6 +50,8 @@ namespace PhantombiteAutoTransfer.Modules
         {
             if (_initialized) return;
             MyAPIGateway.Utilities.RegisterMessageHandler(AUTOTRANSFER_CHANNEL, OnMessageReceived);
+            // Netzwerkpaket-Handler — läuft auf Client UND Server
+            MyAPIGateway.Multiplayer.RegisterMessageHandler(NOTIFY_PACKET_ID, OnNotifyPacketReceived);
             _initialized = true;
             MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] AutoTransfer_Command: Initialized — warte auf Core READY");
         }
@@ -60,6 +64,7 @@ namespace PhantombiteAutoTransfer.Modules
             if (!_initialized) return;
             if (MyAPIGateway.Utilities != null)
                 MyAPIGateway.Utilities.UnregisterMessageHandler(AUTOTRANSFER_CHANNEL, OnMessageReceived);
+            MyAPIGateway.Multiplayer.UnregisterMessageHandler(NOTIFY_PACKET_ID, OnNotifyPacketReceived);
             _initialized = false;
         }
 
@@ -195,18 +200,80 @@ namespace PhantombiteAutoTransfer.Modules
 
         /// <summary>
         /// Sendet eine Nachricht an einen Spieler im Chat.
+        /// Auf Dedicated Server: Netzwerkpaket an den Client.
+        /// Auf lokaler Maschine (SP / Listen-Server-Host): ShowMessage direkt.
         /// </summary>
         public void SendMessage(IMyPlayer player, string message)
         {
             try
             {
                 if (player == null) return;
-                MyAPIGateway.Utilities.ShowMessage(SENDER, message);
+
+                // Lokaler Spieler (SP oder Listen-Server-Host) → direkt anzeigen
+                var localPlayer = MyAPIGateway.Session.LocalHumanPlayer;
+                if (localPlayer != null && localPlayer.SteamUserId == player.SteamUserId)
+                {
+                    MyAPIGateway.Utilities.ShowMessage(SENDER, message);
+                    return;
+                }
+
+                // Dedicated Server → Netzwerkpaket an Remote-Client
+                if (MyAPIGateway.Multiplayer.IsServer)
+                {
+                    byte[] data = Encoding.UTF8.GetBytes(message);
+                    MyAPIGateway.Multiplayer.SendMessageTo(NOTIFY_PACKET_ID, data, player.SteamUserId);
+                }
             }
             catch (Exception ex)
             {
                 MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] AutoTransfer_Command ERROR in SendMessage: " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Empfängt Netzwerkpaket vom Server — läuft auf dem Client.
+        /// Zeigt die Nachricht im Chat an.
+        /// </summary>
+        private void OnNotifyPacketReceived(byte[] data)
+        {
+            try
+            {
+                if (data == null || data.Length == 0) return;
+                string message = Encoding.UTF8.GetString(data);
+                if (message.StartsWith("NOTIFY:"))
+                    MyAPIGateway.Utilities.ShowNotification(message.Substring(7), 3000, MyFontEnum.Green);
+                else
+                    MyAPIGateway.Utilities.ShowMessage(SENDER, message);
+            }
+            catch (Exception ex)
+            {
+                MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] AutoTransfer_Command ERROR in OnNotifyPacketReceived: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Sendet eine HUD-Notification an einen Spieler (kurze Einblendung oben).
+        /// </summary>
+        public void SendNotification(IMyPlayer player, string message)
+        {
+            try
+            {
+                if (player == null) return;
+
+                var localPlayer = MyAPIGateway.Session.LocalHumanPlayer;
+                if (localPlayer != null && localPlayer.SteamUserId == player.SteamUserId)
+                {
+                    MyAPIGateway.Utilities.ShowNotification(message, 3000, MyFontEnum.Green);
+                    return;
+                }
+
+                if (MyAPIGateway.Multiplayer.IsServer)
+                {
+                    byte[] data = Encoding.UTF8.GetBytes("NOTIFY:" + message);
+                    MyAPIGateway.Multiplayer.SendMessageTo(NOTIFY_PACKET_ID, data, player.SteamUserId);
+                }
+            }
+            catch { }
         }
 
         /// <summary>

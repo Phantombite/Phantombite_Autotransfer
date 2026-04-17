@@ -132,7 +132,7 @@ namespace PhantombiteAutoTransfer.Modules
         private const string TEMPLATE_LCD =
             "[AutoTransfer]\r\n" +
             "# ZoneNumber=0 ist ungültig — bitte auf gewünschte Zone setzen (z.B. ZoneNumber=1)\r\n" +
-            "# LCDMode: Main = alle Zonen, Zone = Status + Container-Liter, List = Item-Liste\r\n" +
+            "# LCDMode: Main = alle Zonen, Zone = Status + Container-Liter, List = Item-Liste, ZoneList = Zone+Liste kombiniert\r\n" +
             "#          Group = nur bestimmte Zonen abwechselnd (Zones=1,2,3 setzen)\r\n" +
             "ZoneNumber=0\r\n" +
             "LCDMode=Main\r\n";
@@ -193,6 +193,12 @@ namespace PhantombiteAutoTransfer.Modules
             // Einmalige Log-Flags — verhindert Spam bei anhaltenden Zuständen
             public bool                         PlayerInvFullLogged  = false;
             public bool                         ContainerItemSkipped = false;
+            // Kein Pilot beim Andocken erkannt — verhindert Spam, löst Disconnect aus
+            public bool                         NoPilotDetected      = false;
+            // Spieler bereits in anderer Zone — löst Disconnect aus
+            public bool                         AlreadyDockedDetected = false;
+            // Der exakte Connector der aktuell verbunden ist
+            public long                         ActiveConnectorId    = 0;
         }
 
         private enum TransferMode { None, In, Out, SortIn, SortOut }
@@ -207,7 +213,9 @@ namespace PhantombiteAutoTransfer.Modules
         private bool                      _zonesLoaded       = false;
         private bool                      _templatesDeployed = false;
         private int                       _updateCounter  = 0;
-        private const int                 UPDATE_INTERVAL   = 60;  // ~1 Sekunde
+        private int                       _templatePollCounter = 0;
+        private const int                 UPDATE_INTERVAL        = 60;   // ~1 Sekunde
+        private const int                 TEMPLATE_POLL_INTERVAL = 300;  // ~5 Sekunden (wie Economy)
         private const int                 TRANSFER_INTERVAL = 2;   // 2 Sekunden zwischen Stapeln
         private const int                 LCD_SCROLL_INTERVAL = 3; // Sekunden pro Scroll-Schritt
         private const int                 SORT_CHECK_INTERVAL = 5; // Sekunden zwischen Wachstums-Checks
@@ -273,6 +281,17 @@ namespace PhantombiteAutoTransfer.Modules
 
                     // Event: neues Grid → GridBlockAdded Event registrieren
                     MyAPIGateway.Entities.OnEntityAdd += OnEntityAdd;
+
+                    // Bereits geladene Grids registrieren — OnEntityAdd feuert nicht für Grids
+                    // die beim Serverstart schon existieren
+                    var existingEntities = new HashSet<IMyEntity>();
+                    MyAPIGateway.Entities.GetEntities(existingEntities);
+                    foreach (var entity in existingEntities)
+                    {
+                        var g = entity as IMyCubeGrid;
+                        if (g != null)
+                            g.OnBlockAdded += OnBlockAdded;
+                    }
                 }
 
                 _initialized = true;
@@ -323,6 +342,14 @@ namespace PhantombiteAutoTransfer.Modules
                 if (_updateCounter < UPDATE_INTERVAL) return;
                 _updateCounter = 0;
 
+                // Template-Poll alle 5 Sekunden — wie Economy (OnBlockAdded unzuverlässig auf Server)
+                _templatePollCounter++;
+                if (_templatePollCounter >= TEMPLATE_POLL_INTERVAL / UPDATE_INTERVAL)
+                {
+                    _templatePollCounter = 0;
+                    PollTemplates();
+                }
+
                 CheckConnections();
                 RunTransfers();
                 UpdateLCDs();
@@ -371,14 +398,23 @@ namespace PhantombiteAutoTransfer.Modules
                 string sub = args.Length > 1 ? args[1].ToLower() : "";
                 string result;
 
+                // Logging für Command-Diagnose
+                _logger?.Debug(MODULE, $"HandleCommand: cmd='{cmd}', sub='{sub}', player={(player != null ? player.DisplayName + " (" + player.SteamUserId + ")" : "NULL")}");
+                if (cmd == "in" || cmd == "out" || cmd == "stop")
+                {
+                    _logger?.Debug(MODULE, $"HandleCommand: {_states.Count} State(s) im RAM:");
+                    foreach (var kv in _states)
+                        _logger?.Debug(MODULE, $"  Zone {kv.Key}: OccupiedBy={kv.Value.OccupiedByPlayerId}, Name='{kv.Value.PlayerName}'");
+                }
+
                 switch (cmd)
                 {
                     case "help":
                         _commandModule.SendMessage(player, "=== !pbc autotrans ===");
-                        _commandModule.SendMessage(player, "  in player  — Spieler-Inventar -> Container");
-                        _commandModule.SendMessage(player, "  out player — Container -> Spieler-Inventar");
-                        _commandModule.SendMessage(player, "  in ship    — Schiff -> Container (Sortierer)");
-                        _commandModule.SendMessage(player, "  out ship   — Container -> Schiff (Sortierer)");
+                        _commandModule.SendMessage(player, "  in player  — Container -> Spieler-Inventar");
+                        _commandModule.SendMessage(player, "  out player — Spieler-Inventar -> Container");
+                        _commandModule.SendMessage(player, "  in ship    — Container -> Schiff (Sortierer)");
+                        _commandModule.SendMessage(player, "  out ship   — Schiff -> Container (Sortierer)");
                         _commandModule.SendMessage(player, "  stop       — Transfer stoppen");
                         if (_commandModule.IsAdmin(player))
                         {
@@ -390,18 +426,18 @@ namespace PhantombiteAutoTransfer.Modules
 
                     case "in":
                         if (sub == "player")
-                            result = ExecuteSetMode(player, TransferMode.In);
+                            result = ExecuteSetMode(player, TransferMode.Out);
                         else if (sub == "ship")
-                            result = ExecuteSetMode(player, TransferMode.SortOut);
+                            result = ExecuteSetMode(player, TransferMode.SortIn);
                         else
                             return "Usage: !pbc autotrans in <player|ship>";
                         return result ?? "Fehler: Nicht an einer Ladezone angedockt.";
 
                     case "out":
                         if (sub == "player")
-                            result = ExecuteSetMode(player, TransferMode.Out);
+                            result = ExecuteSetMode(player, TransferMode.In);
                         else if (sub == "ship")
-                            result = ExecuteSetMode(player, TransferMode.SortIn);
+                            result = ExecuteSetMode(player, TransferMode.SortOut);
                         else
                             return "Usage: !pbc autotrans out <player|ship>";
                         return result ?? "Fehler: Nicht an einer Ladezone angedockt.";
@@ -460,11 +496,21 @@ namespace PhantombiteAutoTransfer.Modules
         // Gibt Ergebnis zurück: null = Fehler (nicht angedockt), sonst Erfolgsmeldung
         private string ExecuteSetMode(IMyPlayer player, TransferMode mode)
         {
-            if (player == null) return null;
+            if (player == null)
+            {
+                _logger?.Warn(MODULE, "ExecuteSetMode: player == null — abgebrochen.");
+                return null;
+            }
+
+            _logger?.Debug(MODULE, $"ExecuteSetMode: '{player.DisplayName}' ({player.SteamUserId}), Mode={mode}");
+
             ZoneState state = FindPlayerState(player.SteamUserId);
 
             if (state == null)
-                return null; // nicht angedockt → Fehler
+            {
+                _logger?.Debug(MODULE, $"ExecuteSetMode: Spieler '{player.DisplayName}' hat keine aktive Ladezone.");
+                return null;
+            }
 
             ZoneData zone;
             _zones.TryGetValue(state.ZoneNumber, out zone);
@@ -502,10 +548,18 @@ namespace PhantombiteAutoTransfer.Modules
 
             switch (mode)
             {
-                case TransferMode.In:      return "AutoTransfer IN Player gestartet.";
-                case TransferMode.Out:     return "AutoTransfer OUT Player gestartet.";
-                case TransferMode.SortIn:  return "AutoTransfer IN Ship gestartet.";
-                case TransferMode.SortOut: return "AutoTransfer OUT Ship gestartet.";
+                case TransferMode.In:
+                    _commandModule.SendNotification(player, "OUT Player — Spieler-Inventar → Container");
+                    return "OUT Player aktiv — Spieler-Inventar → Container";
+                case TransferMode.Out:
+                    _commandModule.SendNotification(player, "IN Player — Container → Spieler-Inventar");
+                    return "IN Player aktiv — Container → Spieler-Inventar";
+                case TransferMode.SortIn:
+                    _commandModule.SendNotification(player, "OUT Ship — Schiff → Container (Sortierer)");
+                    return "OUT Ship aktiv — Schiff → Container (Sortierer)";
+                case TransferMode.SortOut:
+                    _commandModule.SendNotification(player, "IN Ship — Container → Schiff (Sortierer)");
+                    return "IN Ship aktiv — Container → Schiff (Sortierer)";
                 default:                   return "AutoTransfer gestoppt.";
             }
         }
@@ -520,6 +574,7 @@ namespace PhantombiteAutoTransfer.Modules
         {
             try
             {
+                _logger?.Debug(MODULE, $"SetSortersForMode Zone {zone.ZoneNumber}: Mode={mode}, SorterIn={zone.SorterInIds.Count}, SorterOut={zone.SorterOutIds.Count}");
                 foreach (long id in zone.SorterInIds)
                 {
                     var block = MyAPIGateway.Entities.GetEntityById(id) as IMyFunctionalBlock;
@@ -544,8 +599,12 @@ namespace PhantombiteAutoTransfer.Modules
             foreach (var kv in _states)
             {
                 if (kv.Value.OccupiedByPlayerId == steamId)
+                {
+                    _logger?.Trace(MODULE, $"FindPlayerState: {steamId} → Zone {kv.Value.ZoneNumber}");
                     return kv.Value;
+                }
             }
+            _logger?.Trace(MODULE, $"FindPlayerState: {steamId} → keine Zone gefunden.");
             return null;
         }
 
@@ -707,9 +766,9 @@ namespace PhantombiteAutoTransfer.Modules
 
             if (_reuseItems.Count == 0)
             {
-                state.Mode              = TransferMode.None;
+                // Container leer — Transfer IN Player läuft weiter, wartet auf neue Items
                 state.OutCurrentSubtype = "";
-                SendToPlayer(state.OccupiedByPlayerId, "AutoTransfer OUT abgeschlossen — Container leer.");
+                _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN Player — Container leer, warte auf Items.");
                 return;
             }
 
@@ -832,9 +891,9 @@ namespace PhantombiteAutoTransfer.Modules
                 state.Mode = TransferMode.None;
 
                 string ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                state.SessionLog.AppendLine($"[{ts}] Sort OUT gestoppt — Container leer.");
+                state.SessionLog.AppendLine($"[{ts}] Sort OUT gestoppt — Zone ist leer.");
 
-                SendToPlayer(state.OccupiedByPlayerId, "Sort OUT gestoppt — Container leer.");
+                SendToPlayer(state.OccupiedByPlayerId, "Sort OUT gestoppt — Zone ist leer.");
             }
         }
 
@@ -925,13 +984,18 @@ namespace PhantombiteAutoTransfer.Modules
                 _logger?.Trace(MODULE, "CheckConnections: keine Zonen geladen — bitte !pbc autotrans scan ausführen.");
                 return;
             }
+            _logger?.Trace(MODULE, $"CheckConnections: {_zones.Count} Zone(n) werden geprüft.");
 
             foreach (var kv in _zones)
             {
                 try
                 {
                     ZoneData zone = kv.Value;
-                    if (zone.HasError) continue;
+                    if (zone.HasError)
+                    {
+                        _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: HasError=true — übersprungen.");
+                        continue;
+                    }
 
                     ZoneState state;
                     if (!_states.TryGetValue(zone.ZoneNumber, out state))
@@ -940,9 +1004,12 @@ namespace PhantombiteAutoTransfer.Modules
                         _states[zone.ZoneNumber] = state;
                     }
 
-                    IMyCubeGrid dockedGrid = FindDockedGrid(zone);
+                    VRageMath.Vector3D connectorPos;
+                    long activeConnectorId;
+                    IMyCubeGrid dockedGrid = FindDockedGrid(zone, out connectorPos, out activeConnectorId);
                     bool isConnected = (dockedGrid != null);
                     bool isOccupied  = (state.OccupiedByPlayerId != 0);
+                    if (isConnected) state.ActiveConnectorId = activeConnectorId;
 
                     _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Connectors={zone.ConnectorIds.Count}, Connected={isConnected}, Occupied={isOccupied}");
 
@@ -955,13 +1022,97 @@ namespace PhantombiteAutoTransfer.Modules
                         _logger?.Debug(MODULE, $"Zone {zone.ZoneNumber}: Schiff angedockt — Besitzer: '{playerName}' (SteamId: {playerId})");
 
                         if (playerId != 0)
-                            OnPlayerDocked(zone, state, playerId, playerName);
+                        {
+                            state.NoPilotDetected = false;
+
+                            // Prüfen ob Spieler bereits eine andere Zone belegt
+                            ZoneState existingState = FindPlayerState(playerId);
+                            if (existingState != null && existingState.ZoneNumber != zone.ZoneNumber)
+                            {
+                                if (!state.AlreadyDockedDetected)
+                                {
+                                    state.AlreadyDockedDetected = true;
+                                    _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Spieler '{playerName}' bereits in Zone {existingState.ZoneNumber} — Connector wird in ~5s getrennt.");
+                                    // Nachricht an den betreffenden Spieler
+                                    _reusePlayers.Clear();
+                                    MyAPIGateway.Players.GetPlayers(_reusePlayers);
+                                    foreach (var p in _reusePlayers)
+                                    {
+                                        if (p.SteamUserId != playerId) continue;
+                                        _commandModule.SendMessage(p, $"Du belegst bereits Ladezone {existingState.ZoneNumber}. Verbindung zu Zone {zone.ZoneNumber} wird getrennt.");
+                                        break;
+                                    }
+                                }
+                                else
+                                {
+                                    // Zweiter Durchlauf: trennen
+                                    state.AlreadyDockedDetected = false;
+                                    _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Spieler '{playerName}' weiterhin doppelt angedockt — trenne Connector {state.ActiveConnectorId}.");
+                                    var connector = MyAPIGateway.Entities.GetEntityById(state.ActiveConnectorId) as IMyShipConnector;
+                                    if (connector != null && connector.Status == Sandbox.ModAPI.Ingame.MyShipConnectorStatus.Connected)
+                                        connector.Disconnect();
+                                    state.ActiveConnectorId = 0;
+                                }
+                            }
+                            else
+                            {
+                                state.AlreadyDockedDetected = false;
+                                OnPlayerDocked(zone, state, playerId, playerName);
+                            }
+                        }
                         else
-                            _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Schiff angedockt aber kein Besitzer gefunden.");
+                        {
+                            if (!state.NoPilotDetected)
+                            {
+                                // Erste Erkennung: einmal loggen + einmal an Spieler in der Nähe
+                                state.NoPilotDetected = true;
+                                _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Schiff angedockt aber kein Pilot im Cockpit — Connector wird in ~5s getrennt.");
+                                _reusePlayers.Clear();
+                                MyAPIGateway.Players.GetPlayers(_reusePlayers);
+                                foreach (var p in _reusePlayers)
+                                {
+                                    if (p.Character == null) continue;
+                                    if (VRageMath.Vector3D.Distance(p.Character.GetPosition(), connectorPos) > 50.0) continue;
+                                    if (FindPlayerState(p.SteamUserId) != null) continue;
+                                    _commandModule.SendMessage(p, $"Ladezone {zone.ZoneNumber}: Kein Pilot erkannt — Verbinder wird automatisch getrennt.");
+                                }
+                            }
+                            else
+                            {
+                                // Zweiter Durchlauf (~5s später): nur den einen verbundenen Connector trennen
+                                state.NoPilotDetected = false;
+                                var connector = MyAPIGateway.Entities.GetEntityById(state.ActiveConnectorId) as IMyShipConnector;
+                                if (connector != null && connector.Status == Sandbox.ModAPI.Ingame.MyShipConnectorStatus.Connected)
+                                {
+                                    connector.Disconnect();
+                                    _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Kein Pilot erkannt — Connector {state.ActiveConnectorId} entkoppelt. Grid wurde getrennt.");
+                                    _reusePlayers.Clear();
+                                    MyAPIGateway.Players.GetPlayers(_reusePlayers);
+                                    foreach (var p in _reusePlayers)
+                                    {
+                                        if (p.Character == null) continue;
+                                        if (VRageMath.Vector3D.Distance(p.Character.GetPosition(), connectorPos) > 50.0) continue;
+                                        _commandModule.SendMessage(p, $"Ladezone {zone.ZoneNumber}: Entkoppelt — kein Pilot erkannt.");
+                                    }
+                                }
+                                else
+                                {
+                                    _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Disconnect-Versuch — Connector {state.ActiveConnectorId} nicht mehr verbunden.");
+                                }
+                                state.ActiveConnectorId = 0;
+                            }
+                        }
                     }
                     else if (!isConnected && isOccupied)
                     {
+                        state.NoPilotDetected = false;
+                        state.AlreadyDockedDetected = false;
                         OnPlayerUndocked(zone, state);
+                    }
+                    else if (!isConnected)
+                    {
+                        state.NoPilotDetected = false;
+                        state.AlreadyDockedDetected = false;
                     }
                 }
                 catch (Exception ex)
@@ -973,82 +1124,102 @@ namespace PhantombiteAutoTransfer.Modules
 
         /// <summary>
         /// Gibt das erste angedockte fremde Grid zurück das an einem Zone-Connector hängt.
+        /// Gibt zusätzlich die World-Position des Zone-Connectors zurück (für Proximity-Meldungen).
         /// </summary>
-        private IMyCubeGrid FindDockedGrid(ZoneData zone)
+        private IMyCubeGrid FindDockedGrid(ZoneData zone, out VRageMath.Vector3D connectorPos, out long activeConnectorId)
         {
+            connectorPos      = VRageMath.Vector3D.Zero;
+            activeConnectorId = 0;
             foreach (long connId in zone.ConnectorIds)
             {
                 var connector = MyAPIGateway.Entities.GetEntityById(connId) as IMyShipConnector;
-                if (connector == null || connector.Closed) continue;
+                if (connector == null || connector.Closed)
+                {
+                    _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Connector {connId} nicht gefunden oder geschlossen.");
+                    continue;
+                }
+                _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Connector {connId} Status={connector.Status}");
                 if (connector.Status != Sandbox.ModAPI.Ingame.MyShipConnectorStatus.Connected) continue;
 
                 var other = connector.OtherConnector;
-                if (other == null) continue;
+                if (other == null)
+                {
+                    _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: OtherConnector ist null trotz Status=Connected.");
+                    continue;
+                }
 
+                connectorPos      = connector.GetPosition();
+                activeConnectorId = connId;
+                _logger?.Debug(MODULE, $"Zone {zone.ZoneNumber}: Angedocktes Grid gefunden: '{other.CubeGrid?.DisplayName}' via Connector {connId}");
                 return other.CubeGrid;
             }
             return null;
         }
 
         /// <summary>
-        /// Ermittelt den Besitzer des Grids (BigOwners[0]).
-        /// Fallback: erster Spieler dessen Character auf dem Grid sitzt.
+        /// Ermittelt den Spieler der beim Andocken im Cockpit sitzt.
+        /// Hauptcockpit wird bevorzugt. Wird nur einmal beim Andocken aufgerufen —
+        /// der gefundene Spieler bleibt bis zum Abdocken gespeichert.
+        /// </summary>
+        /// <summary>
+        /// Holt den Spieler aus dem Cockpit des angedockten Grids.
+        /// Nutzt ControllerInfo.ControllingIdentityId — server-autoritativ, funktioniert
+        /// zuverlässig in SP und Multiplayer, unabhängig von Fraktion oder Besitz.
         /// </summary>
         private void GetGridOwner(IMyCubeGrid grid, out ulong playerId, out string playerName)
         {
             playerId   = 0;
             playerName = "";
 
-            // Singleplayer: direkt den lokalen Spieler nehmen
-            if (MyAPIGateway.Session.OnlineMode == MyOnlineModeEnum.OFFLINE)
-            {
-                var localPlayer = MyAPIGateway.Session.Player;
-                if (localPlayer != null)
-                {
-                    playerId   = localPlayer.SteamUserId;
-                    playerName = localPlayer.DisplayName;
-                    return;
-                }
-            }
+            var cockpits = new List<IMySlimBlock>();
+            grid.GetBlocks(cockpits, b => b.FatBlock is IMyCockpit);
 
-            // Multiplayer: Grid-Besitzer per IdentityId suchen
-            var owners = grid.BigOwners;
-            if (owners != null && owners.Count > 0)
+            _logger?.Debug(MODULE, $"GetGridOwner: Grid='{grid.DisplayName}', {cockpits.Count} Cockpit(s).");
+
+            // Schritt 1: Hauptcockpit (IsMainCockpit + IsOccupied)
+            // ControllerInfo.ControllingIdentityId ist server-seitig immer korrekt
+            foreach (var slim in cockpits)
             {
-                long ownerId = owners[0];
+                var cockpit = slim.FatBlock as IMyCockpit;
+                if (cockpit == null || !cockpit.IsMainCockpit || !cockpit.IsOccupied) continue;
+
+                long identityId = cockpit.ControllerInfo?.ControllingIdentityId ?? 0L;
+                _logger?.Debug(MODULE, $"GetGridOwner: Hauptcockpit besetzt — IdentityId={identityId}");
+                if (identityId == 0) continue;
+
                 _reusePlayers.Clear();
-                MyAPIGateway.Players.GetPlayers(_reusePlayers, p => p.IdentityId == ownerId);
-
+                MyAPIGateway.Players.GetPlayers(_reusePlayers, p => p.IdentityId == identityId);
                 if (_reusePlayers.Count > 0)
                 {
                     playerId   = _reusePlayers[0].SteamUserId;
                     playerName = _reusePlayers[0].DisplayName;
+                    _logger?.Debug(MODULE, $"GetGridOwner: Hauptcockpit → '{playerName}' ({playerId})");
                     return;
                 }
             }
 
-            // Fallback: Spieler im Cockpit
-            _reusePlayers.Clear();
-            MyAPIGateway.Players.GetPlayers(_reusePlayers);
-
-            var cockpits = new List<IMySlimBlock>();
-            grid.GetBlocks(cockpits, b => b.FatBlock is IMyCockpit);
-
+            // Schritt 2: Irgendein besetztes Cockpit
             foreach (var slim in cockpits)
             {
                 var cockpit = slim.FatBlock as IMyCockpit;
-                if (cockpit == null || !cockpit.IsUnderControl) continue;
+                if (cockpit == null || !cockpit.IsOccupied) continue;
 
-                foreach (var p in _reusePlayers)
+                long identityId = cockpit.ControllerInfo?.ControllingIdentityId ?? 0L;
+                _logger?.Debug(MODULE, $"GetGridOwner: Cockpit besetzt — IdentityId={identityId}");
+                if (identityId == 0) continue;
+
+                _reusePlayers.Clear();
+                MyAPIGateway.Players.GetPlayers(_reusePlayers, p => p.IdentityId == identityId);
+                if (_reusePlayers.Count > 0)
                 {
-                    if (p.Character != null && cockpit.Pilot == p.Character)
-                    {
-                        playerId   = p.SteamUserId;
-                        playerName = p.DisplayName;
-                        return;
-                    }
+                    playerId   = _reusePlayers[0].SteamUserId;
+                    playerName = _reusePlayers[0].DisplayName;
+                    _logger?.Debug(MODULE, $"GetGridOwner: Cockpit → '{playerName}' ({playerId})");
+                    return;
                 }
             }
+
+            _logger?.Debug(MODULE, "GetGridOwner: Kein besetztes Cockpit gefunden.");
         }
 
         private void OnPlayerDocked(ZoneData zone, ZoneState state, ulong playerId, string playerName)
@@ -1284,26 +1455,28 @@ namespace PhantombiteAutoTransfer.Modules
                     ZoneState state;
                     _states.TryGetValue(zone.ZoneNumber, out state);
 
-                    // Inventar nur lesen wenn Zone besetzt — spart GetItems Aufruf
+                    // Lokale Liste pro Zone — NICHT _reuseItems verwenden (wird auch für Spieler-Inventar genutzt)
                     float containerLiter = 0f;
+                    var lcdItems = new List<VRage.Game.ModAPI.Ingame.MyInventoryItem>();
 
                     bool zoneOccupied = (state != null && state.OccupiedByPlayerId != 0);
 
-                    if (zoneOccupied)
+                    // Container-Inventar immer lesen — LCD zeigt immer aktuellen Stand
+                    IMyInventory containerInv = GetContainerInventory(zone);
+                    if (containerInv != null)
                     {
-                        IMyInventory containerInv = GetContainerInventory(zone);
-                        if (containerInv != null)
-                        {
-                            _reuseItems.Clear();
-                            containerInv.GetItems(_reuseItems);
-                            containerLiter = (float)containerInv.CurrentVolume * 1000f;
+                        containerInv.GetItems(lcdItems);
+                        containerLiter = (float)containerInv.CurrentVolume * 1000f;
 
+                        // Scrollen nur wenn Zone belegt
+                        if (zoneOccupied && state != null)
+                        {
                             state.LcdScrollCounter++;
                             if (state.LcdScrollCounter >= LCD_SCROLL_INTERVAL)
                             {
                                 state.LcdScrollCounter = 0;
-                                if (_reuseItems.Count > 0)
-                                    state.LcdScrollOffset = (state.LcdScrollOffset + 1) % _reuseItems.Count;
+                                if (lcdItems.Count > 0)
+                                    state.LcdScrollOffset = (state.LcdScrollOffset + 1) % lcdItems.Count;
                                 else
                                     state.LcdScrollOffset = 0;
                             }
@@ -1323,7 +1496,9 @@ namespace PhantombiteAutoTransfer.Modules
                             if (mode == "zone")
                                 text = BuildZoneLcdText(zone, state, containerLiter);
                             else if (mode == "list")
-                                text = BuildListLcdText(zone, state, _reuseItems);
+                                text = BuildListLcdText(zone, state, lcdItems);
+                            else if (mode == "zonelist")
+                                text = BuildZoneListLcdText(zone, state, containerLiter, lcdItems);
                             else
                                 continue;
 
@@ -1619,6 +1794,62 @@ namespace PhantombiteAutoTransfer.Modules
             return _sbLcd.ToString();
         }
 
+        private string BuildZoneListLcdText(ZoneData zone, ZoneState state, float containerLiter, List<VRage.Game.ModAPI.Ingame.MyInventoryItem> items)
+        {
+            _sbLcd.Clear();
+
+            // ── Fester Kopf (Zone-Status) ──────────────────────────
+            _sbLcd.AppendLine($"=== LADEZONE {zone.ZoneNumber} ===");
+
+            if (state == null || state.OccupiedByPlayerId == 0)
+            {
+                _sbLcd.AppendLine("Status: FREI");
+            }
+            else
+            {
+                _sbLcd.AppendLine("Status: BELEGT");
+                _sbLcd.AppendLine($"Spieler: {state.PlayerName}");
+
+                string modeStr = state.Mode == TransferMode.In      ? "OUT Player"
+                               : state.Mode == TransferMode.Out     ? "IN Player"
+                               : state.Mode == TransferMode.SortIn  ? "OUT Ship"
+                               : state.Mode == TransferMode.SortOut ? "IN Ship"
+                               : "GESTOPPT";
+                _sbLcd.AppendLine($"Modus: {modeStr}");
+                _sbLcd.AppendLine($"Container: {containerLiter:F0}L");
+            }
+
+            _sbLcd.AppendLine("──────────────────────────");
+
+            // ── Scrollende Item-Liste ──────────────────────────────
+            if (items == null || items.Count == 0)
+            {
+                _sbLcd.AppendLine("- leer -");
+                return _sbLcd.ToString();
+            }
+
+            const int PAGE_SIZE = 6;
+
+            if (items.Count <= PAGE_SIZE)
+            {
+                foreach (var it in items)
+                    _sbLcd.AppendLine($"{it.Type.SubtypeId,-24} x{(int)(float)it.Amount}");
+            }
+            else
+            {
+                int scrollOffset = (state != null) ? state.LcdScrollOffset : 0;
+                for (int i = 0; i < PAGE_SIZE; i++)
+                {
+                    int idx = (scrollOffset + i) % items.Count;
+                    var item = items[idx];
+                    _sbLcd.AppendLine($"{item.Type.SubtypeId,-24} x{(int)(float)item.Amount}");
+                }
+                _sbLcd.AppendLine($"[{items.Count} Items, scrollt...]");
+            }
+
+            return _sbLcd.ToString();
+        }
+
         private string BuildMainLcdText()
         {
             _sbLcd.Clear();
@@ -1810,7 +2041,54 @@ namespace PhantombiteAutoTransfer.Modules
                 }
 
                 
-                _logger?.Debug(MODULE, $"{_zones.Count} Zone(n) geladen.");
+                foreach (var kv in _zones)
+                {
+                    if (kv.Value.HasError)
+                        _logger?.Warn(MODULE, $"Zone {kv.Key} geladen mit Fehler: {kv.Value.ErrorMessage}");
+                    else
+                        _logger?.Debug(MODULE, $"Zone {kv.Key} geladen — {kv.Value.ConnectorIds.Count} Connector(s), {kv.Value.LcdIds.Count} LCD(s), {kv.Value.SorterInIds.Count} SorterIn, {kv.Value.SorterOutIds.Count} SorterOut.");
+                }
+                // Main-LCDs und Gruppen-LCDs aus allen Entities laden
+                // (werden nur im Scan befüllt — hier nachholen damit UpdateMainLCDs beim Start funktioniert)
+                _mainLcdIds.Clear();
+                _groupLcdZones.Clear();
+                _groupLcdCounter.Clear();
+
+                var allEntities = new HashSet<IMyEntity>();
+                MyAPIGateway.Entities.GetEntities(allEntities);
+                foreach (var entity in allEntities)
+                {
+                    var grid = entity as IMyCubeGrid;
+                    if (grid == null) continue;
+
+                    var blocks = new List<IMySlimBlock>();
+                    grid.GetBlocks(blocks);
+
+                    foreach (var slim in blocks)
+                    {
+                        var block = slim.FatBlock as IMyTerminalBlock;
+                        if (block == null) continue;
+
+                        if (!LCD_SUBTYPES.Contains(block.BlockDefinition.SubtypeId)) continue;
+
+                        string lcdMode = ParseLcdMode(block.CustomData);
+                        if (lcdMode == "main")
+                        {
+                            _mainLcdIds.Add(block.EntityId);
+                        }
+                        else if (lcdMode == "group")
+                        {
+                            var groupZones = ParseGroupZones(block.CustomData);
+                            if (groupZones.Count > 0)
+                            {
+                                _groupLcdZones[block.EntityId]   = groupZones;
+                                _groupLcdCounter[block.EntityId] = 0;
+                            }
+                        }
+                    }
+                }
+
+                _logger?.Debug(MODULE, $"LoadZonesFromCustomData: {_zones.Count} Zone(n), {_mainLcdIds.Count} Main-LCD(s), {_groupLcdZones.Count} Gruppen-LCD(s) geladen.");
             }
             catch (Exception ex)
             {
@@ -1923,7 +2201,7 @@ namespace PhantombiteAutoTransfer.Modules
                         else if (LCD_SUBTYPES.Contains(subtype))
                         {
                             string lcdMode = ParseLcdMode(block.CustomData);
-                            if (lcdMode == "zone" || lcdMode == "list")
+                            if (lcdMode == "zone" || lcdMode == "list" || lcdMode == "zonelist")
                                 allZoneLcds.Add(block);
                             else if (lcdMode == "main")
                                 _mainLcdIds.Add(block.EntityId);
@@ -2279,7 +2557,37 @@ namespace PhantombiteAutoTransfer.Modules
         // -------------------------------------------------------------------------
 
         /// <summary>
-        /// Scannt alle Entities nach Trader-Blöcken und schreibt Templates wo nötig.
+        /// Prüft alle Trader-Blöcke periodisch auf fehlendes Template — wie Economy's PollStoreBlocks.
+        /// Schreibt Template wenn CustomData leer oder ungültig ist.
+        /// Robuster als OnBlockAdded allein, da OnBlockAdded auf Dedicated Servern unzuverlässig ist.
+        /// </summary>
+        private void PollTemplates()
+        {
+            try
+            {
+                _logger?.Trace(MODULE, "PollTemplates: Template-Prüfung gestartet.");
+                var entities = new HashSet<IMyEntity>();
+                MyAPIGateway.Entities.GetEntities(entities);
+
+                foreach (var entity in entities)
+                {
+                    var grid = entity as IMyCubeGrid;
+                    if (grid == null) continue;
+
+                    var blocks = new List<IMySlimBlock>();
+                    grid.GetBlocks(blocks);
+
+                    foreach (var slim in blocks)
+                        TryDeployTemplate(slim.FatBlock);
+                }
+            }
+            catch (Exception ex)
+            {
+                MyLog.Default.WriteLineAndConsole($"[PhantombiteAutoTransfer] AutoTransfer ERROR in PollTemplates:\n{ex}");
+            }
+        }
+
+        /// <summary>
         /// Wird beim Init und per !pbc autotrans scan aufgerufen.
         /// </summary>
         private void ScanAndDeployTemplates()

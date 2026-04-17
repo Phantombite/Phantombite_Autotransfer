@@ -104,6 +104,36 @@
             </DefaultComponents>
         </Container>
         
+
+        <Container>
+            <Id>
+                <TypeId>ConveyorSorter</TypeId>
+                <SubtypeId>AutotransLargeBlockConveyorSorter</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransLargeBlockConveyorSorter" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <Container>
+            <Id>
+                <TypeId>ConveyorSorter</TypeId>
+                <SubtypeId>AutotransMediumBlockConveyorSorter</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransMediumBlockConveyorSorter" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
+
+        <Container>
+            <Id>
+                <TypeId>ConveyorSorter</TypeId>
+                <SubtypeId>AutotransSmallBlockConveyorSorter</SubtypeId>
+            </Id>
+            <DefaultComponents>
+                <Component BuilderType="MyObjectBuilder_Inventory" SubtypeId="AutotransSmallBlockConveyorSorter" ForceCreate="true"/>
+            </DefaultComponents>
+        </Container>
     </EntityContainers>
 
     <EntityComponents>
@@ -161,6 +191,30 @@
             <Id>
                 <TypeId>Inventory</TypeId>
                 <SubtypeId>AutotransSmallBlockInsetConnectorMedium</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransLargeBlockConveyorSorter</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+        
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransMediumBlockConveyorSorter</SubtypeId>
+            </Id>
+            <Size x="0" y="0" z="1" />
+        </EntityComponent>
+
+        <EntityComponent xsi:type="MyObjectBuilder_InventoryComponentDefinition">
+            <Id>
+                <TypeId>Inventory</TypeId>
+                <SubtypeId>AutotransSmallBlockConveyorSorter</SubtypeId>
             </Id>
             <Size x="0" y="0" z="1" />
         </EntityComponent>
