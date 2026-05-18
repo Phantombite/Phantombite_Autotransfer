@@ -30,12 +30,17 @@ namespace PhantombiteAutoTransfer.Modules
         private const ushort NOTIFY_PACKET_ID      = 19509;   // Netzwerkpaket: Server → Client
         private const string MOD_NAME              = "Phantombite_AutoTransfer";
         private const string SENDER                = "[AT]";
+        private const string VERSION               = "1.2.0";
 
         private bool _initialized = false;
 
         // ── Log-Level (vom Core gesetzt) ──────────────────────────────────────
         private enum LogLevel { Normal = 0, Debug = 1, Trace = 2 }
         private LogLevel _logLevel = LogLevel.Normal;
+
+        // ── Performance-Level (vom Core gesetzt) ─────────────────────────────
+        /// <summary>0=voll, 1=2x Intervall, 2=nur aktive Zonen, 3=reduzierter Batch</summary>
+        public int PerfLevel { get; private set; } = 0;
 
         // ── Referenz auf Main (wird von Session gesetzt) ───────────────────────
         private AutoTransferMain _mainModule;
@@ -86,11 +91,27 @@ namespace PhantombiteAutoTransfer.Modules
 
                 if (msg.StartsWith("LOGLEVEL|"))
                 {
-                    string levelStr = msg.Substring(9).ToLower();
-                    _logLevel = levelStr == "trace" ? LogLevel.Trace
-                              : levelStr == "debug" ? LogLevel.Debug
-                              : LogLevel.Normal;
-                    MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] AutoTransfer_Command: LogLevel gesetzt: " + _logLevel);
+                    int lvl;
+                    if (int.TryParse(msg.Substring(9), out lvl))
+                        _logLevel = (LogLevel)Math.Min(lvl, 2);
+                    else
+                    {
+                        string s = msg.Substring(9).ToLower();
+                        _logLevel = s == "trace" ? LogLevel.Trace : s == "debug" ? LogLevel.Debug : LogLevel.Normal;
+                    }
+                    Log("AutoTransfer_Command", "LOGLEVEL gesetzt: " + (int)_logLevel, 1);
+                    return;
+                }
+
+                if (msg.StartsWith("PERFLEVEL|"))
+                {
+                    int lvl;
+                    if (int.TryParse(msg.Substring(10), out lvl))
+                    {
+                        PerfLevel = Math.Max(0, Math.Min(3, lvl));
+                        Log("AutoTransfer_Command", "PERFLEVEL gesetzt: " + PerfLevel, 1);
+                        MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, "PERFACK|autotrans|" + PerfLevel);
+                    }
                     return;
                 }
 
@@ -115,6 +136,7 @@ namespace PhantombiteAutoTransfer.Modules
                 string msg = "REGISTER"
                     + "|autotrans"
                     + "|AutoTransfer Ladezonen"
+                    + "|" + VERSION
                     + "|" + AUTOTRANSFER_CHANNEL
                     + "|in:0:Transfer starten (Spieler/Schiff -> Container)"
                     + "|out:0:Transfer starten (Container -> Spieler/Schiff)"
@@ -158,7 +180,7 @@ namespace PhantombiteAutoTransfer.Modules
                 string[] args = new string[argEnd - 2];
                 Array.Copy(parts, 2, args, 0, args.Length);
 
-                Debug("AutoTransfer_Command", "Command empfangen: " + command + " — SteamId: " + steamId);
+                Log("AutoTransfer_Command", "Command empfangen: " + command + " — SteamId: " + steamId, 1);
 
                 IMyPlayer player = FindPlayer(steamId);
 
@@ -186,7 +208,7 @@ namespace PhantombiteAutoTransfer.Modules
 
                 // CMDRESULT zurueck an Core
                 string argsJoined = string.Join("|", args);
-                string status     = executed ? "ok" : "fail";
+                string status     = executed ? "ok" : "error";
                 string result     = "CMDRESULT|autotrans|" + command + "|" + argsJoined + "|" + steamId + "|" + status + "|" + resultMsg;
                 MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, result);
             }
@@ -302,26 +324,28 @@ namespace PhantombiteAutoTransfer.Modules
 
         // ── Log API (fuer alle AutoTransfer-Module) ───────────────────────────
 
-        public void Warn(string module, string message)   { SendLog("WARN",  module, message); }
-        public void Error(string module, string message)  { SendLog("ERROR", module, message); }
-
-        public void Info(string module, string message)
+        public void Warn(string module, string message)
         {
-            if (_logLevel < LogLevel.Debug) return;
-            SendLog("INFO", module, message);
+            MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] [WARN] [" + module + "] " + message);
+            SendLog("WARN", module, message);
         }
 
-        public void Debug(string module, string message)
+        public void Error(string module, string message)
         {
-            if (_logLevel < LogLevel.Debug) return;
-            SendLog("DEBUG", module, message);
+            MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] [ERROR] [" + module + "] " + message);
+            SendLog("ERROR", module, message);
         }
 
-        public void Trace(string module, string message)
+        public void Log(string module, string message, int level = 0)
         {
-            if (_logLevel < LogLevel.Trace) return;
-            SendLog("TRACE", module, message);
+            if (level > 0 && (int)_logLevel < level) return;
+            MyLog.Default.WriteLineAndConsole("[PhantombiteAutoTransfer] [" + level + "] [" + module + "] " + message);
+            SendLog(level.ToString(), module, message);
         }
+
+        // ── HEAVY Signale an Core ─────────────────────────────────────────────
+        public void HeavyStart(string op) { try { MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, "HEAVY_START|autotrans|" + op); } catch { } }
+        public void HeavyEnd(string op)   { try { MyAPIGateway.Utilities.SendModMessage(CORE_CHANNEL, "HEAVY_END|autotrans|" + op);   } catch { } }
 
         private void SendLog(string level, string module, string message)
         {

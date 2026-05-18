@@ -120,8 +120,8 @@ namespace PhantombiteAutoTransfer.Modules
             "[AutoTransfer]\r\n" +
             "# ZoneNumber=0 ist ungültig — bitte auf gewünschte Zone setzen (z.B. ZoneNumber=1)\r\n" +
             "ZoneNumber=0\r\n" +
-            "# SorterMode: in  = zieht Items aus Spieler-Schiff -> Container\r\n" +
-            "#             out = schickt Items aus Container -> Spieler-Schiff\r\n" +
+            "# SorterMode: in  = OUT Ship — zieht Items aus Spieler-Schiff -> Ladezone\r\n" +
+            "#             out = IN Ship  — schickt Items aus Ladezone -> Spieler-Schiff\r\n" +
             "SorterMode=in\r\n";
 
         private const string TEMPLATE_CONNECTOR =
@@ -215,6 +215,7 @@ namespace PhantombiteAutoTransfer.Modules
         private int                       _updateCounter  = 0;
         private int                       _templatePollCounter = 0;
         private const int                 UPDATE_INTERVAL        = 60;   // ~1 Sekunde
+        private const int                 TRANSFER_INTERVAL_BASE = 2;    // 2s zwischen Stapeln (PerfLevel 0)
         private const int                 TEMPLATE_POLL_INTERVAL = 300;  // ~5 Sekunden (wie Economy)
         private const int                 TRANSFER_INTERVAL = 2;   // 2 Sekunden zwischen Stapeln
         private const int                 LCD_SCROLL_INTERVAL = 3; // Sekunden pro Scroll-Schritt
@@ -267,7 +268,7 @@ namespace PhantombiteAutoTransfer.Modules
             if (_initialized) return;
 
             
-            _logger?.Debug(MODULE, "Initializing...");
+            _logger?.Log(MODULE, "Initializing...", 1);
 
             try
             {
@@ -296,7 +297,7 @@ namespace PhantombiteAutoTransfer.Modules
 
                 _initialized = true;
                 
-                _logger?.Debug(MODULE, "Initialized.");
+                _logger?.Log(MODULE, "Initialized.", 1);
             }
             catch (Exception ex)
             {
@@ -328,12 +329,12 @@ namespace PhantombiteAutoTransfer.Modules
                     // (passiert beim ersten Start oder wenn CustomData noch keine EntityIds hat)
                     if (_zones.Count == 0)
                     {
-                        _logger?.Debug(MODULE, "Keine Zonen in CustomData — starte automatischen Scan...");
+                        _logger?.Log(MODULE, "Keine Zonen in CustomData — starte automatischen Scan...", 1);
                         ExecuteZoneScan(null);
                     }
                     else
                     {
-                        _logger?.Debug(MODULE, $"{_zones.Count} Zone(n) aus CustomData geladen.");
+                        _logger?.Log(MODULE, $"{_zones.Count} Zone(n) aus CustomData geladen.", 1);
                     }
                     return;
                 }
@@ -380,7 +381,7 @@ namespace PhantombiteAutoTransfer.Modules
             }
 
             _initialized = false;
-            _logger?.Debug(MODULE, "Closed.");
+            _logger?.Log(MODULE, "Closed.", 1);
         }
 
         // -------------------------------------------------------------------------
@@ -399,12 +400,12 @@ namespace PhantombiteAutoTransfer.Modules
                 string result;
 
                 // Logging für Command-Diagnose
-                _logger?.Debug(MODULE, $"HandleCommand: cmd='{cmd}', sub='{sub}', player={(player != null ? player.DisplayName + " (" + player.SteamUserId + ")" : "NULL")}");
+                _logger?.Log(MODULE, $"HandleCommand: cmd='{cmd}', sub='{sub}', player={(player != null ? player.DisplayName + " (" + player.SteamUserId + ")" : "NULL")}", 1);
                 if (cmd == "in" || cmd == "out" || cmd == "stop")
                 {
-                    _logger?.Debug(MODULE, $"HandleCommand: {_states.Count} State(s) im RAM:");
+                    _logger?.Log(MODULE, $"HandleCommand: {_states.Count} State(s) im RAM:", 1);
                     foreach (var kv in _states)
-                        _logger?.Debug(MODULE, $"  Zone {kv.Key}: OccupiedBy={kv.Value.OccupiedByPlayerId}, Name='{kv.Value.PlayerName}'");
+                        _logger?.Log(MODULE, $"  Zone {kv.Key}: OccupiedBy={kv.Value.OccupiedByPlayerId}, Name='{kv.Value.PlayerName}'", 1);
                 }
 
                 switch (cmd)
@@ -502,13 +503,13 @@ namespace PhantombiteAutoTransfer.Modules
                 return null;
             }
 
-            _logger?.Debug(MODULE, $"ExecuteSetMode: '{player.DisplayName}' ({player.SteamUserId}), Mode={mode}");
+            _logger?.Log(MODULE, $"ExecuteSetMode: '{player.DisplayName}' ({player.SteamUserId}), Mode={mode}", 1);
 
             ZoneState state = FindPlayerState(player.SteamUserId);
 
             if (state == null)
             {
-                _logger?.Debug(MODULE, $"ExecuteSetMode: Spieler '{player.DisplayName}' hat keine aktive Ladezone.");
+                _logger?.Log(MODULE, $"ExecuteSetMode: Spieler '{player.DisplayName}' hat keine aktive Ladezone.", 1);
                 return null;
             }
 
@@ -574,7 +575,7 @@ namespace PhantombiteAutoTransfer.Modules
         {
             try
             {
-                _logger?.Debug(MODULE, $"SetSortersForMode Zone {zone.ZoneNumber}: Mode={mode}, SorterIn={zone.SorterInIds.Count}, SorterOut={zone.SorterOutIds.Count}");
+                _logger?.Log(MODULE, $"SetSortersForMode Zone {zone.ZoneNumber}: Mode={mode}, SorterIn={zone.SorterInIds.Count}, SorterOut={zone.SorterOutIds.Count}", 1);
                 foreach (long id in zone.SorterInIds)
                 {
                     var block = MyAPIGateway.Entities.GetEntityById(id) as IMyFunctionalBlock;
@@ -600,11 +601,11 @@ namespace PhantombiteAutoTransfer.Modules
             {
                 if (kv.Value.OccupiedByPlayerId == steamId)
                 {
-                    _logger?.Trace(MODULE, $"FindPlayerState: {steamId} → Zone {kv.Value.ZoneNumber}");
+                    _logger?.Log(MODULE, $"FindPlayerState: {steamId} → Zone {kv.Value.ZoneNumber}", 2);
                     return kv.Value;
                 }
             }
-            _logger?.Trace(MODULE, $"FindPlayerState: {steamId} → keine Zone gefunden.");
+            _logger?.Log(MODULE, $"FindPlayerState: {steamId} → keine Zone gefunden.", 2);
             return null;
         }
 
@@ -614,26 +615,34 @@ namespace PhantombiteAutoTransfer.Modules
 
         private void RunTransfers()
         {
+            int perfLevel = _logger?.PerfLevel ?? 0;
+
+            // PerfLevel 1+: Transfer-Intervall verdoppeln
+            int interval = perfLevel >= 1 ? TRANSFER_INTERVAL_BASE * 2 : TRANSFER_INTERVAL_BASE;
+
             foreach (var kv in _states)
             {
                 ZoneState state = kv.Value;
                 if (state.Mode == TransferMode.None || state.OccupiedByPlayerId == 0) continue;
+
+                // PerfLevel 2: Idle-Zonen überspringen (Mode == None bereits gefiltert oben)
+                // Hier: nur Zonen mit aktivem Transfer (nicht None) → bereits durch obige Bedingung abgedeckt
 
                 ZoneData zone;
                 if (!_zones.TryGetValue(state.ZoneNumber, out zone)) continue;
                 if (zone.HasError) continue;
 
                 state.TransferCounter++;
-                _logger?.Trace(MODULE, $"Zone {state.ZoneNumber}: Mode={state.Mode}, TransferCounter={state.TransferCounter}/{TRANSFER_INTERVAL}");
-                if (state.TransferCounter < TRANSFER_INTERVAL) continue;
+                _logger?.Log(MODULE, $"Zone {state.ZoneNumber}: Mode={state.Mode}, TransferCounter={state.TransferCounter}/{interval}", 2);
+                if (state.TransferCounter < interval) continue;
                 state.TransferCounter = 0;
 
                 try
                 {
                     if (state.Mode == TransferMode.In)
-                        RunTransferIn(zone, state);
+                        RunTransferIn(zone, state, perfLevel);
                     else if (state.Mode == TransferMode.Out)
-                        RunTransferOut(zone, state);
+                        RunTransferOut(zone, state, perfLevel);
                     else if (state.Mode == TransferMode.SortIn)
                         CheckSortIn(zone, state);
                     else if (state.Mode == TransferMode.SortOut)
@@ -650,7 +659,7 @@ namespace PhantombiteAutoTransfer.Modules
         /// Transferiert einen Stapel vom Spieler-Inventar in den Container.
         /// Respektiert KeepList — Items unter Mindestmenge bleiben beim Spieler.
         /// </summary>
-        private void RunTransferIn(ZoneData zone, ZoneState state)
+        private void RunTransferIn(ZoneData zone, ZoneState state, int perfLevel = 0)
         {
             _reusePlayers.Clear();
             MyAPIGateway.Players.GetPlayers(_reusePlayers, p => p.SteamUserId == state.OccupiedByPlayerId);
@@ -671,7 +680,7 @@ namespace PhantombiteAutoTransfer.Modules
                 string ts = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 state.SessionLog.AppendLine($"[{ts}] Transfer IN gestoppt — Container voll. Item blieb im Spieler-Inventar.");
                 state.HasTransferError = true;
-                _logger?.Debug(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN gestoppt — Container voll ({(float)containerInv.CurrentVolume * 1000f:F0}L).");
+                _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN gestoppt — Container voll ({(float)containerInv.CurrentVolume * 1000f:F0}L).", 1);
                 SendToPlayer(state.OccupiedByPlayerId, "AutoTransfer IN gestoppt — Container voll.");
                 return;
             }
@@ -679,10 +688,16 @@ namespace PhantombiteAutoTransfer.Modules
             // Snapshot für .Type — Transfer sofort nach Snapshot (Index stabil)
             _reuseItems.Clear();
             playerInv.GetItems(_reuseItems);
-            _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN — Spieler-Inventar: {_reuseItems.Count} Stapel, Container: {(float)containerInv.CurrentVolume * 1000f:F0}L / {(float)containerInv.MaxVolume * 1000f:F0}L");
+            _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN — Spieler-Inventar: {_reuseItems.Count} Stapel, Container: {(float)containerInv.CurrentVolume * 1000f:F0}L / {(float)containerInv.MaxVolume * 1000f:F0}L", 2);
+
+            // PerfLevel 3: max 5 Items pro Tick statt alle auf einmal
+            int maxItems = (perfLevel >= 3) ? 5 : _reuseItems.Count;
+            int processed = 0;
 
             for (int i = 0; i < _reuseItems.Count; i++)
             {
+                if (processed >= maxItems) break;
+
                 var item     = _reuseItems[i];
                 int current  = (int)(float)item.Amount;
                 int keep     = GetKeepAmount(item.Type.SubtypeId);
@@ -691,41 +706,28 @@ namespace PhantombiteAutoTransfer.Modules
                 if (transfer <= 0)
                 {
                     if (keep > 0)
-                        _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: KeepList — {item.Type.SubtypeId}: behalte {keep}, vorhanden {current}");
+                        _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: KeepList — {item.Type.SubtypeId}: behalte {keep}, vorhanden {current}", 2);
                     continue;
                 }
 
                 VRage.MyFixedPoint fp = (VRage.MyFixedPoint)transfer;
 
-                // Prüfen ob Container das Item aufnehmen kann
-                if (!containerInv.CanItemsBeAdded(fp, item.Type))
-                {
-                    if (!state.ContainerItemSkipped)
-                    {
-                        string tsSkip = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                        string skipKey = item.Type.TypeId + "/" + item.Type.SubtypeId;
-                        state.SessionLog.AppendLine($"[{tsSkip}] Transfer IN übersprungen — Container verweigert Item: {item.Type.SubtypeId} ({skipKey}) x{transfer}");
-                        state.ContainerItemSkipped = true;
-                    }
-                    continue;
-                }
-                state.ContainerItemSkipped = false;
-
                 playerInv.TransferItemTo(containerInv, i, null, true, fp, false);
+                processed++;
 
                 string tsItem = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 string itemKey = item.Type.TypeId + "/" + item.Type.SubtypeId;
                 float usedL = (float)containerInv.CurrentVolume * 1000f;
-                _logger?.Debug(MODULE, $"Transfer IN: {item.Type.SubtypeId} x{transfer} | Container: {usedL:F0}L");
+                _logger?.Log(MODULE, $"Transfer OUT Player: {item.Type.SubtypeId} x{transfer} | Container: {usedL:F0}L", 1);
                 if (_logMode)
-                    state.SessionLog.AppendLine($"[{tsItem}] Transfer IN: {item.Type.SubtypeId} ({itemKey}) x{transfer} | Container: {usedL:F0}L");
-                SendToPlayer(state.OccupiedByPlayerId, $"Transfer IN: {item.Type.SubtypeId} ({itemKey}) x{transfer}");
+                    state.SessionLog.AppendLine($"[{tsItem}] Transfer OUT Player: {item.Type.SubtypeId} ({itemKey}) x{transfer} | Container: {usedL:F0}L");
+                SendToPlayer(state.OccupiedByPlayerId, $"Transfer OUT Player: {item.Type.SubtypeId} x{transfer}");
                 SendToPlayer(state.OccupiedByPlayerId, $"Container: {usedL:F0}L");
                 return;
             }
 
             // Spieler-Inventar leer oder alles auf KeepList → still warten
-            _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN — kein Transfer in diesem Tick (Inventar leer oder alles KeepList).");
+            _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN — kein Transfer in diesem Tick (Inventar leer oder alles KeepList).", 2);
         }
 
         /// <summary>
@@ -733,7 +735,7 @@ namespace PhantombiteAutoTransfer.Modules
         /// Bevorzugt aktuelles Item (OutCurrentSubtype) bis es leer ist,
         /// dann erst zum nächsten Stapel wechseln.
         /// </summary>
-        private void RunTransferOut(ZoneData zone, ZoneState state)
+        private void RunTransferOut(ZoneData zone, ZoneState state, int perfLevel = 0)
         {
             _reusePlayers.Clear();
             MyAPIGateway.Players.GetPlayers(_reusePlayers, p => p.SteamUserId == state.OccupiedByPlayerId);
@@ -768,11 +770,11 @@ namespace PhantombiteAutoTransfer.Modules
             {
                 // Container leer — Transfer IN Player läuft weiter, wartet auf neue Items
                 state.OutCurrentSubtype = "";
-                _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN Player — Container leer, warte auf Items.");
+                _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Transfer IN Player — Container leer, warte auf Items.", 1);
                 return;
             }
 
-            _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Transfer OUT — Container: {_reuseItems.Count} Stapel, {(float)containerInv.CurrentVolume * 1000f:F0}L | Spieler: {(float)playerInv.CurrentVolume * 1000f:F0}L/{(float)playerInv.MaxVolume * 1000f:F0}L");
+            _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Transfer OUT — Container: {_reuseItems.Count} Stapel, {(float)containerInv.CurrentVolume * 1000f:F0}L | Spieler: {(float)playerInv.CurrentVolume * 1000f:F0}L/{(float)playerInv.MaxVolume * 1000f:F0}L", 2);
 
             if (string.IsNullOrEmpty(state.OutCurrentSubtype))
                 state.OutCurrentSubtype = _reuseItems[0].Type.SubtypeId;
@@ -789,7 +791,7 @@ namespace PhantombiteAutoTransfer.Modules
 
             if (targetIndex < 0)
             {
-                _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Transfer OUT — Ziel-Item '{state.OutCurrentSubtype}' nicht mehr vorhanden, wechsle zu '{_reuseItems[0].Type.SubtypeId}'.");
+                _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Transfer OUT — Ziel-Item '{state.OutCurrentSubtype}' nicht mehr vorhanden, wechsle zu '{_reuseItems[0].Type.SubtypeId}'.", 2);
                 state.OutCurrentSubtype = _reuseItems[0].Type.SubtypeId;
                 targetIndex = 0;
             }
@@ -797,18 +799,15 @@ namespace PhantombiteAutoTransfer.Modules
             var targetItem = _reuseItems[targetIndex];
             VRage.MyFixedPoint amount = targetItem.Amount;
 
-            // Prüfen ob Spieler-Inventar das Item aufnehmen kann — verhindert Despawn
-            if (!playerInv.CanItemsBeAdded(amount, targetItem.Type)) return;
-
             containerInv.TransferItemTo(playerInv, targetIndex, null, true, amount, false);
 
             string tsOut = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             string itemKeyOut = targetItem.Type.TypeId + "/" + targetItem.Type.SubtypeId;
             float usedLOut = (float)containerInv.CurrentVolume * 1000f;
-            _logger?.Debug(MODULE, $"Transfer OUT: {targetItem.Type.SubtypeId} x{(int)(float)amount} | Container: {usedLOut:F0}L");
+            _logger?.Log(MODULE, $"Transfer IN Player: {targetItem.Type.SubtypeId} x{(int)(float)amount} | Container: {usedLOut:F0}L", 1);
             if (_logMode)
-                state.SessionLog.AppendLine($"[{tsOut}] Transfer OUT: {targetItem.Type.SubtypeId} ({itemKeyOut}) x{(int)(float)amount} | Container: {usedLOut:F0}L");
-            SendToPlayer(state.OccupiedByPlayerId, $"Transfer OUT: {targetItem.Type.SubtypeId} ({itemKeyOut}) x{(int)(float)amount}");
+                state.SessionLog.AppendLine($"[{tsOut}] Transfer IN Player: {targetItem.Type.SubtypeId} ({itemKeyOut}) x{(int)(float)amount} | Container: {usedLOut:F0}L");
+            SendToPlayer(state.OccupiedByPlayerId, $"Transfer IN Player: {targetItem.Type.SubtypeId} x{(int)(float)amount}");
             SendToPlayer(state.OccupiedByPlayerId, $"Container: {usedLOut:F0}L");
         }
 
@@ -831,11 +830,11 @@ namespace PhantombiteAutoTransfer.Modules
             {
                 state.LastContainerVolume   = currentVolume;
                 state.SortInNoGrowthCounter = 0;
-                _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Sort IN — Basisvolumen gesetzt: {currentVolume * 1000f:F0}L");
+                _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Sort IN — Basisvolumen gesetzt: {currentVolume * 1000f:F0}L", 2);
                 return;
             }
 
-            _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Sort IN — Volume: {currentVolume * 1000f:F0}L (vorher: {state.LastContainerVolume * 1000f:F0}L), NoGrowth: {state.SortInNoGrowthCounter}/{NO_GROWTH_MAX}");
+            _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Sort IN — Volume: {currentVolume * 1000f:F0}L (vorher: {state.LastContainerVolume * 1000f:F0}L), NoGrowth: {state.SortInNoGrowthCounter}/{NO_GROWTH_MAX}", 2);
 
             if (currentVolume > state.LastContainerVolume + 0.001f)
             {
@@ -883,7 +882,7 @@ namespace PhantombiteAutoTransfer.Modules
             IMyInventory containerInv = GetContainerInventory(zone);
             if (containerInv == null) return;
 
-            _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Sort OUT — Container: {(float)containerInv.CurrentVolume * 1000f:F0}L");
+            _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Sort OUT — Container: {(float)containerInv.CurrentVolume * 1000f:F0}L", 2);
 
             if ((float)containerInv.CurrentVolume < 0.001f)
             {
@@ -960,7 +959,7 @@ namespace PhantombiteAutoTransfer.Modules
                 }
 
                 
-                _logger?.Debug(MODULE, $"KeepList geladen — {_keepList.Count} Einträge.");
+                _logger?.Log(MODULE, $"KeepList geladen — {_keepList.Count} Einträge.", 2);
             }
             catch (Exception ex)
             {
@@ -981,10 +980,10 @@ namespace PhantombiteAutoTransfer.Modules
         {
             if (_zones.Count == 0)
             {
-                _logger?.Trace(MODULE, "CheckConnections: keine Zonen geladen — bitte !pbc autotrans scan ausführen.");
+                _logger?.Log(MODULE, "CheckConnections: keine Zonen geladen — bitte !pbc autotrans scan ausführen.", 1);
                 return;
             }
-            _logger?.Trace(MODULE, $"CheckConnections: {_zones.Count} Zone(n) werden geprüft.");
+            _logger?.Log(MODULE, $"CheckConnections: {_zones.Count} Zone(n) werden geprüft.", 1);
 
             foreach (var kv in _zones)
             {
@@ -993,7 +992,7 @@ namespace PhantombiteAutoTransfer.Modules
                     ZoneData zone = kv.Value;
                     if (zone.HasError)
                     {
-                        _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: HasError=true — übersprungen.");
+                        _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: HasError=true — übersprungen.", 1);
                         continue;
                     }
 
@@ -1011,7 +1010,7 @@ namespace PhantombiteAutoTransfer.Modules
                     bool isOccupied  = (state.OccupiedByPlayerId != 0);
                     if (isConnected) state.ActiveConnectorId = activeConnectorId;
 
-                    _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Connectors={zone.ConnectorIds.Count}, Connected={isConnected}, Occupied={isOccupied}");
+                    _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Connectors={zone.ConnectorIds.Count}, Connected={isConnected}, Occupied={isOccupied}", 1);
 
                     if (isConnected && !isOccupied)
                     {
@@ -1019,7 +1018,7 @@ namespace PhantombiteAutoTransfer.Modules
                         string playerName;
                         GetGridOwner(dockedGrid, out playerId, out playerName);
 
-                        _logger?.Debug(MODULE, $"Zone {zone.ZoneNumber}: Schiff angedockt — Besitzer: '{playerName}' (SteamId: {playerId})");
+                        _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Schiff angedockt — Besitzer: '{playerName}' (SteamId: {playerId})", 1);
 
                         if (playerId != 0)
                         {
@@ -1138,7 +1137,7 @@ namespace PhantombiteAutoTransfer.Modules
                     _logger?.Warn(MODULE, $"Zone {zone.ZoneNumber}: Connector {connId} nicht gefunden oder geschlossen.");
                     continue;
                 }
-                _logger?.Trace(MODULE, $"Zone {zone.ZoneNumber}: Connector {connId} Status={connector.Status}");
+                _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Connector {connId} Status={connector.Status}", 1);
                 if (connector.Status != Sandbox.ModAPI.Ingame.MyShipConnectorStatus.Connected) continue;
 
                 var other = connector.OtherConnector;
@@ -1150,7 +1149,7 @@ namespace PhantombiteAutoTransfer.Modules
 
                 connectorPos      = connector.GetPosition();
                 activeConnectorId = connId;
-                _logger?.Debug(MODULE, $"Zone {zone.ZoneNumber}: Angedocktes Grid gefunden: '{other.CubeGrid?.DisplayName}' via Connector {connId}");
+                _logger?.Log(MODULE, $"Zone {zone.ZoneNumber}: Angedocktes Grid gefunden: '{other.CubeGrid?.DisplayName}' via Connector {connId}", 1);
                 return other.CubeGrid;
             }
             return null;
@@ -1174,7 +1173,7 @@ namespace PhantombiteAutoTransfer.Modules
             var cockpits = new List<IMySlimBlock>();
             grid.GetBlocks(cockpits, b => b.FatBlock is IMyCockpit);
 
-            _logger?.Debug(MODULE, $"GetGridOwner: Grid='{grid.DisplayName}', {cockpits.Count} Cockpit(s).");
+            _logger?.Log(MODULE, $"GetGridOwner: Grid='{grid.DisplayName}', {cockpits.Count} Cockpit(s).", 1);
 
             // Schritt 1: Hauptcockpit (IsMainCockpit + IsOccupied)
             // ControllerInfo.ControllingIdentityId ist server-seitig immer korrekt
@@ -1184,7 +1183,7 @@ namespace PhantombiteAutoTransfer.Modules
                 if (cockpit == null || !cockpit.IsMainCockpit || !cockpit.IsOccupied) continue;
 
                 long identityId = cockpit.ControllerInfo?.ControllingIdentityId ?? 0L;
-                _logger?.Debug(MODULE, $"GetGridOwner: Hauptcockpit besetzt — IdentityId={identityId}");
+                _logger?.Log(MODULE, $"GetGridOwner: Hauptcockpit besetzt — IdentityId={identityId}", 1);
                 if (identityId == 0) continue;
 
                 _reusePlayers.Clear();
@@ -1193,7 +1192,7 @@ namespace PhantombiteAutoTransfer.Modules
                 {
                     playerId   = _reusePlayers[0].SteamUserId;
                     playerName = _reusePlayers[0].DisplayName;
-                    _logger?.Debug(MODULE, $"GetGridOwner: Hauptcockpit → '{playerName}' ({playerId})");
+                    _logger?.Log(MODULE, $"GetGridOwner: Hauptcockpit → '{playerName}' ({playerId})", 1);
                     return;
                 }
             }
@@ -1205,7 +1204,7 @@ namespace PhantombiteAutoTransfer.Modules
                 if (cockpit == null || !cockpit.IsOccupied) continue;
 
                 long identityId = cockpit.ControllerInfo?.ControllingIdentityId ?? 0L;
-                _logger?.Debug(MODULE, $"GetGridOwner: Cockpit besetzt — IdentityId={identityId}");
+                _logger?.Log(MODULE, $"GetGridOwner: Cockpit besetzt — IdentityId={identityId}", 1);
                 if (identityId == 0) continue;
 
                 _reusePlayers.Clear();
@@ -1214,12 +1213,12 @@ namespace PhantombiteAutoTransfer.Modules
                 {
                     playerId   = _reusePlayers[0].SteamUserId;
                     playerName = _reusePlayers[0].DisplayName;
-                    _logger?.Debug(MODULE, $"GetGridOwner: Cockpit → '{playerName}' ({playerId})");
+                    _logger?.Log(MODULE, $"GetGridOwner: Cockpit → '{playerName}' ({playerId})", 1);
                     return;
                 }
             }
 
-            _logger?.Debug(MODULE, "GetGridOwner: Kein besetztes Cockpit gefunden.");
+            _logger?.Log(MODULE, "GetGridOwner: Kein besetztes Cockpit gefunden.", 1);
         }
 
         private void OnPlayerDocked(ZoneData zone, ZoneState state, ulong playerId, string playerName)
@@ -1255,7 +1254,7 @@ namespace PhantombiteAutoTransfer.Modules
             SendToPlayer(playerId, "  !pbc autotrans in/out ship    — Ladezone <-> Schiff");
             SendToPlayer(playerId, "  !pbc autotrans stop           — Transfer stoppen");
             
-            _logger?.Debug(MODULE, $"Spieler '{playerName}' angedockt an Zone {zone.ZoneNumber}.");
+            _logger?.Log(MODULE, $"Spieler '{playerName}' angedockt an Zone {zone.ZoneNumber}.", 1);
         }
 
         private void OnPlayerUndocked(ZoneData zone, ZoneState state)
@@ -1317,7 +1316,7 @@ namespace PhantombiteAutoTransfer.Modules
 
             SendToPlayer(oldPlayerId, $"Ladezone {zone.ZoneNumber} freigegeben.");
             
-            _logger?.Debug(MODULE, $"Spieler '{oldName}' abgedockt von Zone {zone.ZoneNumber}.");
+            _logger?.Log(MODULE, $"Spieler '{oldName}' abgedockt von Zone {zone.ZoneNumber}.", 1);
         }
 
         // -------------------------------------------------------------------------
@@ -1429,7 +1428,7 @@ namespace PhantombiteAutoTransfer.Modules
                 }
 
                 
-                    _logger?.Debug(MODULE, $"Transfer-Log gespeichert: {fileName}");
+                    _logger?.Log(MODULE, $"Transfer-Log gespeichert: {fileName}", 1);
             }
             catch (Exception ex)
             {
@@ -1630,10 +1629,10 @@ namespace PhantombiteAutoTransfer.Modules
                 }
                 else
                 {
-                    string modeStr = st.Mode == TransferMode.In      ? "TRANSFER IN"
-                                   : st.Mode == TransferMode.Out     ? "TRANSFER OUT"
-                                   : st.Mode == TransferMode.SortIn  ? "SORT IN"
-                                   : st.Mode == TransferMode.SortOut ? "SORT OUT"
+                    string modeStr = st.Mode == TransferMode.In      ? "OUT Player"
+                                   : st.Mode == TransferMode.Out     ? "IN Player"
+                                   : st.Mode == TransferMode.SortIn  ? "OUT Ship"
+                                   : st.Mode == TransferMode.SortOut ? "IN Ship"
                                    : "GESTOPPT";
                     _sbLcd.AppendLine($"Zone {zn}: {st.PlayerName} ({modeStr})");
                 }
@@ -1666,10 +1665,10 @@ namespace PhantombiteAutoTransfer.Modules
 
             _sbLcd.AppendLine($"Spieler: {state.PlayerName}");
 
-            string modeStr = state.Mode == TransferMode.In      ? "TRANSFER IN"
-                           : state.Mode == TransferMode.Out     ? "TRANSFER OUT"
-                           : state.Mode == TransferMode.SortIn  ? "SORT IN"
-                           : state.Mode == TransferMode.SortOut ? "SORT OUT"
+            string modeStr = state.Mode == TransferMode.In      ? "OUT Player"
+                           : state.Mode == TransferMode.Out     ? "IN Player"
+                           : state.Mode == TransferMode.SortIn  ? "OUT Ship"
+                           : state.Mode == TransferMode.SortOut ? "IN Ship"
                            : "GESTOPPT";
             _sbLcd.AppendLine($"Modus: {modeStr}");
 
@@ -1749,10 +1748,10 @@ namespace PhantombiteAutoTransfer.Modules
                 _sbLcd.AppendLine("Status: BELEGT");
                 _sbLcd.AppendLine($"Spieler: {state.PlayerName}");
 
-                string modeStr = state.Mode == TransferMode.In      ? "TRANSFER IN"
-                               : state.Mode == TransferMode.Out     ? "TRANSFER OUT"
-                               : state.Mode == TransferMode.SortIn  ? "SORT IN (Sortierer)"
-                               : state.Mode == TransferMode.SortOut ? "SORT OUT (Sortierer)"
+                string modeStr = state.Mode == TransferMode.In      ? "OUT Player"
+                               : state.Mode == TransferMode.Out     ? "IN Player"
+                               : state.Mode == TransferMode.SortIn  ? "OUT Ship"
+                               : state.Mode == TransferMode.SortOut ? "IN Ship"
                                : "GESTOPPT";
                 _sbLcd.AppendLine($"Modus: {modeStr}");
                 _sbLcd.AppendLine($"Container: {containerLiter:F0}L");
@@ -1881,10 +1880,10 @@ namespace PhantombiteAutoTransfer.Modules
                 }
                 else
                 {
-                    string modeStr = state.Mode == TransferMode.In      ? "IN"
-                                   : state.Mode == TransferMode.Out     ? "OUT"
-                                   : state.Mode == TransferMode.SortIn  ? "SORT-IN"
-                                   : state.Mode == TransferMode.SortOut ? "SORT-OUT"
+                    string modeStr = state.Mode == TransferMode.In      ? "OUT Player"
+                                   : state.Mode == TransferMode.Out     ? "IN Player"
+                                   : state.Mode == TransferMode.SortIn  ? "OUT Ship"
+                                   : state.Mode == TransferMode.SortOut ? "IN Ship"
                                    : "STOP";
                     _sbLcd.AppendLine($"Zone {zoneNumber}: BELEGT - {state.PlayerName} ({modeStr})");
                 }
@@ -2046,7 +2045,7 @@ namespace PhantombiteAutoTransfer.Modules
                     if (kv.Value.HasError)
                         _logger?.Warn(MODULE, $"Zone {kv.Key} geladen mit Fehler: {kv.Value.ErrorMessage}");
                     else
-                        _logger?.Debug(MODULE, $"Zone {kv.Key} geladen — {kv.Value.ConnectorIds.Count} Connector(s), {kv.Value.LcdIds.Count} LCD(s), {kv.Value.SorterInIds.Count} SorterIn, {kv.Value.SorterOutIds.Count} SorterOut.");
+                        _logger?.Log(MODULE, $"Zone {kv.Key} geladen — {kv.Value.ConnectorIds.Count} Connector(s), {kv.Value.LcdIds.Count} LCD(s), {kv.Value.SorterInIds.Count} SorterIn, {kv.Value.SorterOutIds.Count} SorterOut.", 1);
                 }
                 // Main-LCDs und Gruppen-LCDs aus allen Entities laden
                 // (werden nur im Scan befüllt — hier nachholen damit UpdateMainLCDs beim Start funktioniert)
@@ -2088,7 +2087,7 @@ namespace PhantombiteAutoTransfer.Modules
                     }
                 }
 
-                _logger?.Debug(MODULE, $"LoadZonesFromCustomData: {_zones.Count} Zone(n), {_mainLcdIds.Count} Main-LCD(s), {_groupLcdZones.Count} Gruppen-LCD(s) geladen.");
+                _logger?.Log(MODULE, $"LoadZonesFromCustomData: {_zones.Count} Zone(n), {_mainLcdIds.Count} Main-LCD(s), {_groupLcdZones.Count} Gruppen-LCD(s) geladen.", 1);
             }
             catch (Exception ex)
             {
@@ -2153,7 +2152,7 @@ namespace PhantombiteAutoTransfer.Modules
         /// </summary>
         private void ScanLog(IMyPlayer player, string msg)
         {
-            _logger?.Debug(MODULE, "Scan: " + msg);
+            _logger?.Log(MODULE, "Scan: " + msg, 1);
             if (player != null) _commandModule.SendMessage(player, msg);
         }
 
@@ -2322,7 +2321,7 @@ namespace PhantombiteAutoTransfer.Modules
                     ScanLog(player, $"Scan abgeschlossen — {scanOk} OK, {scanError} Fehler.");
 
                 
-                _logger?.Debug(MODULE, $"ZoneScan abgeschlossen — {scanOk} OK, {scanError} Fehler.");
+                _logger?.Log(MODULE, $"ZoneScan abgeschlossen — {scanOk} OK, {scanError} Fehler.", 1);
             }
             catch (Exception ex)
             {
@@ -2565,7 +2564,7 @@ namespace PhantombiteAutoTransfer.Modules
         {
             try
             {
-                _logger?.Trace(MODULE, "PollTemplates: Template-Prüfung gestartet.");
+                _logger?.Log(MODULE, "PollTemplates: Template-Prüfung gestartet.", 1);
                 var entities = new HashSet<IMyEntity>();
                 MyAPIGateway.Entities.GetEntities(entities);
 
@@ -2615,7 +2614,7 @@ namespace PhantombiteAutoTransfer.Modules
                 }
 
                 
-                _logger?.Debug(MODULE, $"Templates in {count} Blöcke geschrieben.");
+                _logger?.Log(MODULE, $"Templates in {count} Blöcke geschrieben.", 1);
             }
             catch (Exception ex)
             {
@@ -2710,7 +2709,7 @@ namespace PhantombiteAutoTransfer.Modules
             {
                 termBlock.CustomData = template;
                 
-                _logger?.Trace(MODULE, $"Template geschrieben ({blockType}): {subtype}");
+                _logger?.Log(MODULE, $"Template geschrieben ({blockType}): {subtype}", 1);
                 return true;
             }
 
@@ -2720,7 +2719,7 @@ namespace PhantombiteAutoTransfer.Modules
                 // Ungültig → Template anhängen damit vorhandene Admin-Daten nicht verloren gehen
                 termBlock.CustomData = customData.TrimEnd() + "\r\n\r\n" + template;
                 
-                _logger?.Trace(MODULE, $"Template ergänzt ({blockType}): {subtype}");
+                _logger?.Log(MODULE, $"Template ergänzt ({blockType}): {subtype}", 1);
                 return true;
             }
 
