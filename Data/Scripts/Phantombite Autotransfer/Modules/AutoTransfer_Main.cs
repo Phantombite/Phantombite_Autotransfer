@@ -345,8 +345,10 @@ namespace PhantombiteAutoTransfer.Modules
                 _updateCounter = 0;
 
                 // Template-Poll alle 5 Sekunden — wie Economy (OnBlockAdded unzuverlässig auf Server)
+                // Bei erhöhtem PerfLevel seltener prüfen: 5 s / 10 s / 20 s / 40 s
+                int pollEvery = (TEMPLATE_POLL_INTERVAL / UPDATE_INTERVAL) << Math.Min(_logger?.PerfLevel ?? 0, 3);
                 _templatePollCounter++;
-                if (_templatePollCounter >= TEMPLATE_POLL_INTERVAL / UPDATE_INTERVAL)
+                if (_templatePollCounter >= pollEvery)
                 {
                     _templatePollCounter = 0;
                     PollTemplates();
@@ -2566,6 +2568,7 @@ namespace PhantombiteAutoTransfer.Modules
             try
             {
                 _logger?.Log(MODULE, "PollTemplates: Template-Prüfung gestartet.", 1);
+                _logger?.HeavyStart("PollTemplates"); // Core kann so Lastspitzen diesem Mod zuordnen
                 var entities = new HashSet<IMyEntity>();
                 MyAPIGateway.Entities.GetEntities(entities);
 
@@ -2574,8 +2577,9 @@ namespace PhantombiteAutoTransfer.Modules
                     var grid = entity as IMyCubeGrid;
                     if (grid == null) continue;
 
+                    // Nur Blöcke mit Funktionsteil (Panzerung u. Ä. hat keins) — spart Listen und Aufrufe
                     var blocks = new List<IMySlimBlock>();
-                    grid.GetBlocks(blocks);
+                    grid.GetBlocks(blocks, b => b.FatBlock != null);
 
                     foreach (var slim in blocks)
                         TryDeployTemplate(slim.FatBlock);
@@ -2584,6 +2588,10 @@ namespace PhantombiteAutoTransfer.Modules
             catch (Exception ex)
             {
                 MyLog.Default.WriteLineAndConsole($"[PhantombiteAutoTransfer] AutoTransfer ERROR in PollTemplates:\n{ex}");
+            }
+            finally
+            {
+                _logger?.HeavyEnd("PollTemplates");
             }
         }
 
